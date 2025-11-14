@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="row space-between">
+    <div>
+      <h2 style="margin:0 0 .5rem 0;">Datenquelle</h2>
+      <p class="muted" style="margin:.25rem 0 0 0;">CSV-Upload <em>oder</em> Auto-Sync über Garmin&nbsp;Connect (inoffiziell).</p>
+    </div>
+  </div>
+
+  <form class="upload-form" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+    <label for="file" class="label">Garmin CSV hochladen</label>
+    <input type="file" id="file" name="file" accept=".csv">
+    <button type="submit">Hochladen</button>
+    <p class="muted">In Garmin Connect einen Bericht (z. B. Schritte/Schlaf/Kalorien) öffnen → „Export CSV“.</p>
+  </form>
+
+  <div class="divider"></div>
+
+  <form class="sync-form" action="{{ url_for('sync_now') }}" method="post">
+    <div class="row">
+      <div>
+        <label for="days">Tage abrufen</label>
+        <input type="number" id="days" name="days" min="1" max="365" value="30">
+      </div>
+      <div class="align-end">
+        <button type="submit">Jetzt synchronisieren</button>
+      </div>
+    </div>
+    {% if not gc_available %}
+      <p class="muted small">Hinweis: <code>garminconnect</code> ist nicht installiert. <code>pip install garminconnect</code></p>
+    {% elif not garmin_env_ok %}
+      <p class="muted small">Hinweis: Setze <code>GARMIN_EMAIL</code> und <code>GARMIN_PASSWORD</code> als Umgebungsvariablen.</p>
+    {% else %}
+      <p class="muted small">Verbunden. Klicke auf „Jetzt synchronisieren“, um Tageswerte abzuholen.</p>
+    {% endif %}
+  </form>
+
+  <form class="filter-form" method="get" action="{{ url_for('index') }}">
+    <div class="row">
+      <div>
+        <label for="start">Startdatum</label>
+        <input type="date" id="start" name="start" value="{{ start }}">
+      </div>
+      <div>
+        <label for="end">Enddatum</label>
+        <input type="date" id="end" name="end" value="{{ end }}">
+      </div>
+      <div class="align-end">
+        <button type="submit">Filter anwenden</button>
+      </div>
+    </div>
+  </form>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <ul class="flash">
+        {% for m in messages %}<li>{{ m }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+  {% endwith %}
+</section>
+
+{% if not has_data %}
+  <section class="panel">
+    <p>Noch keine Daten gefunden. Lade eine Garmin-CSV hoch, synchronisiere über den Button oben oder lege Dateien in den Ordner <code>data/</code>.</p>
+  </section>
+{% else %}
+  <section class="kpis">
+    <div class="kpi">
+      <div class="kpi-value">{{ kpi.days }}</div>
+      <div class="kpi-label">Tage</div>
+    </div>
+    {% if kpi.avg_steps %}
+    <div class="kpi">
+      <div class="kpi-value">{{ "{:,.0f}".format(kpi.avg_steps).replace(",", ".") }}</div>
+      <div class="kpi-label">Ø Schritte/Tag</div>
+    </div>
+    {% endif %}
+    {% if kpi.avg_cal %}
+    <div class="kpi">
+      <div class="kpi-value">{{ "{:,.0f}".format(kpi.avg_cal).replace(",", ".") }}</div>
+      <div class="kpi-label">Ø Kalorien/Tag</div>
+    </div>
+    {% endif %}
+    {% if kpi.avg_rhr %}
+    <div class="kpi">
+      <div class="kpi-value">{{ "{:.1f}".format(kpi.avg_rhr) }}</div>
+      <div class="kpi-label">Ø Ruhepuls</div>
+    </div>
+    {% endif %}
+    {% if kpi.avg_sleep %}
+    <div class="kpi">
+      <div class="kpi-value">{{ "{:,.0f}".format(kpi.avg_sleep).replace(",", ".") }}</div>
+      <div class="kpi-label">Ø Schlaf (Min.)</div>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if metrics %}
+  <section class="grid">
+    {% for m in metrics %}
+      <div class="panel">
+        <h3>{{ display_names.get(m, m) }}</h3>
+        <img class="chart" alt="{{ display_names.get(m, m) }} Diagramm"
+             src="{{ url_for('plot', metric=m) }}{% if query_string %}?{{ query_string|safe }}{% endif %}">
+      </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <div class="row space-between">
+      <h3>Letzte Tage</h3>
+      <a class="button-link" href="{{ url_for('download_csv') }}{% if query_string %}?{{ query_string|safe }}{% endif %}">Als CSV herunterladen</a>
+    </div>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Datum</th>
+            <th>Schritte</th>
+            <th>Kalorien</th>
+            <th>Ruhepuls</th>
+            <th>Schlaf (Min.)</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in table_rows %}
+          <tr>
+            <td>{{ r["date"].strftime("%d.%m.%Y") if r["date"] else "" }}</td>
+            <td>{{ ("" if r.get("steps") is none else "{:,.0f}".format(r.get("steps")).replace(",", ".")) }}</td>
+            <td>{{ ("" if r.get("calories") is none else "{:,.0f}".format(r.get("calories")).replace(",", ".")) }}</td>
+            <td>{{ ("" if r.get("rest_hr") is none else "{:.0f}".format(r.get("rest_hr"))) }}</td>
+            <td>{{ ("" if r.get("sleep_minutes") is none else "{:,.0f}".format(r.get("sleep_minutes")).replace(",", ".")) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endif %}
+
+{% if files %}
+<section class="panel muted">
+  <strong>Geladene Dateien:</strong> {{ ", ".join(files) }}
+</section>
+{% endif %}
+{% endblock %}

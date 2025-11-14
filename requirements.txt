@@ -1,0 +1,5 @@
+Flask>=3.0
+pandas>=2.0
+matplotlib>=3.7
+# Optional für Auto-Sync (Variante 2)
+garminconnect>=0.2
