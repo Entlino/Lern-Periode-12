@@ -5,16 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <header class="site-header">
-    <h1>{{ title }}</h1>
-  </header>
-  <main class="container">
-    {% block content %}{% endblock %}
-  </main>
-  <footer class="site-footer">
-    <small>© {{ 2025 }} – Minimal-App. Daten bleiben lokal bei Ihnen.</small>
-  </footer>
+  <div class="bg-glow"></div>
+  <div class="app-shell">
+    <header class="site-header">
+      <div class="brand">
+        <div class="brand-icon"></div>
+        <div>
+          <p class="eyebrow">Garmin Insights</p>
+          <h1>{{ title }}</h1>
+        </div>
+      </div>
+      <nav class="header-actions">
+        <a class="ghost-btn" href="README.md" target="_blank" rel="noopener">Projektbeschreibung</a>
+      </nav>
+    </header>
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="site-footer">
+      <small>© {{ 2025 }} – Daten bleiben lokal auf diesem Rechner.</small>
+    </footer>
+  </div>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

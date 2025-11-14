@@ -1,107 +1,142 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="panel">
-  <div class="row space-between">
-    <div>
-      <h2 style="margin:0 0 .5rem 0;">Datenquelle</h2>
-      <p class="muted" style="margin:.25rem 0 0 0;">CSV-Upload <em>oder</em> Auto-Sync über Garmin&nbsp;Connect (inoffiziell).</p>
-    </div>
-  </div>
-
-  <form class="upload-form" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
-    <label for="file" class="label">Garmin CSV hochladen</label>
+<section class="data-intake">
+  <form class="pill upload-pill" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+    <label for="file" class="label">Garmin CSV</label>
     <input type="file" id="file" name="file" accept=".csv">
-    <button type="submit">Hochladen</button>
-    <p class="muted">In Garmin Connect einen Bericht (z. B. Schritte/Schlaf/Kalorien) öffnen → „Export CSV“.</p>
+    <button type="submit">Importieren</button>
   </form>
-
-  <div class="divider"></div>
-
-  <form class="sync-form" action="{{ url_for('sync_now') }}" method="post">
-    <div class="row">
-      <div>
-        <label for="days">Tage abrufen</label>
-        <input type="number" id="days" name="days" min="1" max="365" value="30">
-      </div>
-      <div class="align-end">
-        <button type="submit">Jetzt synchronisieren</button>
-      </div>
-    </div>
+  <form class="pill sync-pill" action="{{ url_for('sync_now') }}" method="post">
+    <label for="days">Auto-Sync (Tage)</label>
+    <input type="number" id="days" name="days" min="1" max="365" value="30">
+    <button type="submit">Sync</button>
     {% if not gc_available %}
-      <p class="muted small">Hinweis: <code>garminconnect</code> ist nicht installiert. <code>pip install garminconnect</code></p>
+      <span class="muted tiny">Installiere <code>garminconnect</code>.</span>
     {% elif not garmin_env_ok %}
-      <p class="muted small">Hinweis: Setze <code>GARMIN_EMAIL</code> und <code>GARMIN_PASSWORD</code> als Umgebungsvariablen.</p>
+      <span class="muted tiny">Setze <code>GARMIN_EMAIL</code>/<code>PASSWORD</code>.</span>
     {% else %}
-      <p class="muted small">Verbunden. Klicke auf „Jetzt synchronisieren“, um Tageswerte abzuholen.</p>
+      <span class="muted tiny success">Bereit für Abruf.</span>
     {% endif %}
   </form>
-
-  <form class="filter-form" method="get" action="{{ url_for('index') }}">
-    <div class="row">
-      <div>
-        <label for="start">Startdatum</label>
-        <input type="date" id="start" name="start" value="{{ start }}">
-      </div>
-      <div>
-        <label for="end">Enddatum</label>
-        <input type="date" id="end" name="end" value="{{ end }}">
-      </div>
-      <div class="align-end">
-        <button type="submit">Filter anwenden</button>
-      </div>
+  <form class="pill filter-pill" method="get" action="{{ url_for('index') }}">
+    <div class="filter-range">
+      <label for="start">Von</label>
+      <input type="date" id="start" name="start" value="{{ start }}">
+      <label for="end">Bis</label>
+      <input type="date" id="end" name="end" value="{{ end }}">
     </div>
-  </form>
-
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}
-      <ul class="flash">
-        {% for m in messages %}<li>{{ m }}</li>{% endfor %}
-      </ul>
+    <button type="submit">Filter</button>
+    {% if has_data %}
+      <a class="ghost-btn tiny" href="{{ url_for('download_csv') }}{% if query_string %}?{{ query_string|safe }}{% endif %}">Export CSV</a>
     {% endif %}
-  {% endwith %}
+  </form>
 </section>
 
+{% with messages = get_flashed_messages() %}
+  {% if messages %}
+    <div class="flash-stack">
+      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+
 {% if not has_data %}
-  <section class="panel">
-    <p>Noch keine Daten gefunden. Lade eine Garmin-CSV hoch, synchronisiere über den Button oben oder lege Dateien in den Ordner <code>data/</code>.</p>
+  <section class="empty-state">
+    <div class="empty-card">
+      <h3>Noch keine Messwerte</h3>
+      <p>Importiere eine CSV oder synchronisiere ein paar Tage. Danach erscheinen hier automatisch die Kacheln und Analysen.</p>
+    </div>
   </section>
 {% else %}
-  <section class="kpis">
-    <div class="kpi">
-      <div class="kpi-value">{{ kpi.days }}</div>
-      <div class="kpi-label">Tage</div>
-    </div>
-    {% if kpi.avg_steps %}
-    <div class="kpi">
-      <div class="kpi-value">{{ "{:,.0f}".format(kpi.avg_steps).replace(",", ".") }}</div>
-      <div class="kpi-label">Ø Schritte/Tag</div>
+  <section class="metric-grid">
+    {% for card in metric_cards %}
+    <article class="metric-card" data-metric="{{ card.metric }}" data-hint="{{ card.hint }}">
+      <header>
+        <div>
+          <p class="eyebrow">{{ card.label }}</p>
+          <strong class="metric-value">{{ card.latest or "–" }}</strong>
+        </div>
+        {% if card.trend and card.trend.delta %}
+        <span class="trend-chip status-{{ card.trend.tone }}">
+          {% if card.trend.change == "up" %}▲{% elif card.trend.change == "down" %}▼{% else %}→{% endif %}
+          {{ card.trend.delta }}
+        </span>
+        {% endif %}
+      </header>
+      <p class="muted small">Ø {{ card.avg or "n/a" }} · Letzter Wert {{ card.latest_date or "?" }}</p>
+      {% if ai_enabled %}
+      <button class="ai-chip" type="button" data-action="metric-ai">KI-Analyse</button>
+      <div class="metric-ai" id="ai-{{ card.metric }}"><span class="placeholder">Tippe auf „KI-Analyse“.</span></div>
+      {% else %}
+      <p class="muted tiny">KI lokal deaktiviert.</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </section>
+
+  <section class="secondary-grid">
+    {% if insights %}
+    <div class="panel glass">
+      <header class="panel-head">
+        <div>
+          <p class="eyebrow">Kurzstatements</p>
+          <h3>Automatische Insights</h3>
+        </div>
+      </header>
+      <ul class="insights">
+        {% for text in insights %}
+          <li>{{ text }}</li>
+        {% endfor %}
+      </ul>
     </div>
     {% endif %}
-    {% if kpi.avg_cal %}
-    <div class="kpi">
-      <div class="kpi-value">{{ "{:,.0f}".format(kpi.avg_cal).replace(",", ".") }}</div>
-      <div class="kpi-label">Ø Kalorien/Tag</div>
-    </div>
-    {% endif %}
-    {% if kpi.avg_rhr %}
-    <div class="kpi">
-      <div class="kpi-value">{{ "{:.1f}".format(kpi.avg_rhr) }}</div>
-      <div class="kpi-label">Ø Ruhepuls</div>
-    </div>
-    {% endif %}
-    {% if kpi.avg_sleep %}
-    <div class="kpi">
-      <div class="kpi-value">{{ "{:,.0f}".format(kpi.avg_sleep).replace(",", ".") }}</div>
-      <div class="kpi-label">Ø Schlaf (Min.)</div>
+
+    {% if weekly_overview %}
+    <div class="panel glass">
+      <header class="panel-head">
+        <div>
+          <p class="eyebrow">Wochenrhythmus</p>
+          <h3>Aggregierte Werte</h3>
+        </div>
+      </header>
+      <div class="table-wrapper compact">
+        <table class="weekly-table">
+          <thead>
+            <tr>
+              <th>Woche</th>
+              <th>Spanne</th>
+              <th>Schritte</th>
+              <th>Kalorien</th>
+              <th>Ø Schlaf</th>
+              <th>Ø Ruhepuls</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for week in weekly_overview %}
+            <tr>
+              <td>{{ week.label }}</td>
+              <td>{{ week.range }}</td>
+              <td>{{ week.steps }}</td>
+              <td>{{ week.calories }}</td>
+              <td>{{ week.sleep }}</td>
+              <td>{{ week.rest_hr }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
     {% endif %}
   </section>
 
-  {% if metrics %}
-  <section class="grid">
-    {% for m in metrics %}
-      <div class="panel">
-        <h3>{{ display_names.get(m, m) }}</h3>
+  {% if chart_metrics %}
+  <section class="chart-grid">
+    {% for m in chart_metrics %}
+      <div class="chart-card">
+        <header>
+          <h3>{{ display_names.get(m, m) }}</h3>
+          <span class="muted small">Tageswerte + 7-Tage-Schnitt</span>
+        </header>
         <img class="chart" alt="{{ display_names.get(m, m) }} Diagramm"
              src="{{ url_for('plot', metric=m) }}{% if query_string %}?{{ query_string|safe }}{% endif %}">
       </div>
@@ -109,10 +144,12 @@
   </section>
   {% endif %}
 
-  <section class="panel">
-    <div class="row space-between">
-      <h3>Letzte Tage</h3>
-      <a class="button-link" href="{{ url_for('download_csv') }}{% if query_string %}?{{ query_string|safe }}{% endif %}">Als CSV herunterladen</a>
+  <section class="panel glass">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Tabelle</p>
+        <h3>Letzte 14 Tage</h3>
+      </div>
     </div>
     <div class="table-wrapper">
       <table>
@@ -142,8 +179,52 @@
 {% endif %}
 
 {% if files %}
-<section class="panel muted">
+<section class="panel glass muted">
   <strong>Geladene Dateien:</strong> {{ ", ".join(files) }}
 </section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% if ai_enabled %}
+<script>
+(function(){
+  const filters = {{ {"start": start, "end": end}|tojson }};
+  document.querySelectorAll('[data-action="metric-ai"]').forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      const card = event.currentTarget.closest(".metric-card");
+      const metric = card.dataset.metric;
+      const hint = card.dataset.hint || "";
+      const output = card.querySelector(".metric-ai");
+      btn.disabled = true;
+      btn.textContent = "Analysiere…";
+      output.innerHTML = "<span class='placeholder'>Lokales Modell denkt nach …</span>";
+      try {
+        const resp = await fetch("{{ url_for('ai_coach') }}", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            metric,
+            prompt: hint,
+            start: filters.start || undefined,
+            end: filters.end || undefined
+          })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.error || "Unbekannter Fehler");
+        }
+        output.textContent = data.message;
+      } catch(err) {
+        output.innerHTML = "<span class='error'>" + (err.message || "Analyse fehlgeschlagen") + "</span>";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "KI-Analyse";
+      }
+    });
+  });
+})();
+</script>
 {% endif %}
 {% endblock %}
