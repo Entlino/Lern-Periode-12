@@ -1,35 +1,36 @@
-# -*- coding: utf-8 -*-
 import io
 import json
 import os
 from datetime import datetime, date, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib
-matplotlib.use("Agg")  # Headless backend (server-friendly)
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 from flask import Flask, render_template, request, redirect, url_for, send_file, flash, jsonify
 
 APP_TITLE = "Garmin Mini-Dashboard"
-UPLOAD_DIR = "uploads"
-DATA_DIR = "data"
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+DATA_DIR = BASE_DIR / "data"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
 OLLAMA_MAX_TOKENS = int(os.environ.get("OLLAMA_MAX_TOKENS", "400"))
 ENABLE_LOCAL_AI = os.environ.get("ENABLE_LOCAL_AI", "1").lower() not in {"0", "false", "off"}
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB
-app.config["UPLOAD_FOLDER"] = UPLOAD_DIR
+app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+app.config["UPLOAD_FOLDER"] = str(UPLOAD_DIR)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
 
-# Ensure dirs exist
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Column name aliases we try to normalize from Garmin CSVs
+
 COLUMN_ALIASES: Dict[str, List[str]] = {
     "date": ["Date", "date", "ActivityDate", "CalendarDate", "day", "StartDate", "Datum"],
     "steps": ["Steps", "steps", "TotalSteps", "dailySteps", "Step Count", "StepCount", "step_count", "Schritte"],
@@ -83,7 +84,6 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=["date", "steps", "calories", "rest_hr", "sleep_minutes"])
 
-    # Rename columns to our canonical names if possible
     rename_map = {}
     for canonical, aliases in COLUMN_ALIASES.items():
         present = _first_present(df.columns, aliases)
@@ -93,7 +93,7 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     keep = [c for c in ["date", "steps", "calories", "rest_hr", "sleep_minutes"] if c in df.columns]
     if not keep:
-        # special: if sleep seconds present, convert to minutes
+
         if "totalSleepSeconds" in df.columns:
             df["sleep_minutes"] = pd.to_numeric(df["totalSleepSeconds"], errors="coerce") / 60.0
             keep = ["sleep_minutes"]
@@ -102,18 +102,17 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df[keep].copy()
 
-    # Parse date
+
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
 
-    # Convert numerics (support comma decimals)
     for col in ["steps", "calories", "rest_hr", "sleep_minutes"]:
         if col in df.columns:
             df[col] = (
                 df[col]
                 .astype(str)
                 .str.replace(",", ".", regex=False)
-                .str.replace("\u00A0", "", regex=False)  # non-breaking space
+                .str.replace("\u00A0", "", regex=False)
                 .str.replace(" ", "", regex=False)
             )
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -121,20 +120,18 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if "sleep_minutes" in df.columns and df["sleep_minutes"].notna().any():
         non_na = df["sleep_minutes"].dropna()
         max_val = non_na.max()
-        # looks like seconds
+
         if max_val > 600:
             df["sleep_minutes"] = df["sleep_minutes"] / 60.0
         else:
             q95 = non_na.quantile(0.95)
-            # values probably in hours if most entries below 24
+
             if q95 <= 24:
                 df["sleep_minutes"] = df["sleep_minutes"] * 60.0
 
-    # Drop rows without date
     if "date" in df.columns:
         df = df.dropna(subset=["date"])
 
-    # Aggregate by date (if multiple rows per day from different files)
     if "date" in df.columns and len(df) > 0:
         agg_map = {c: "mean" for c in df.columns if c != "date"}
         df = df.groupby("date", as_index=False).agg(agg_map).sort_values("date")
@@ -142,7 +139,7 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def _parse_csv(file_path: str) -> pd.DataFrame:
-    # Try auto-detected separator to support comma/semicolon
+
     try:
         df = pd.read_csv(file_path, sep=None, engine="python")
     except Exception:
@@ -153,23 +150,20 @@ def _load_all_data() -> Tuple[pd.DataFrame, List[str]]:
     found_files: List[str] = []
     frames: List[pd.DataFrame] = []
 
-    def maybe_add(path: str):
-        if os.path.isfile(path):
+    def maybe_add(path: Path):
+        if path.is_file():
             try:
                 frames.append(_parse_csv(path))
-                found_files.append(os.path.basename(path))
+                found_files.append(path.name)
             except Exception as e:
                 print(f"Fehler beim Einlesen von {path}: {e}")
 
-    # Single combined CSV
-    for name in os.listdir(DATA_DIR):
-        if name.lower().endswith(".csv"):
-            maybe_add(os.path.join(DATA_DIR, name))
 
-    # Uploaded files
-    for name in os.listdir(UPLOAD_DIR):
-        if name.lower().endswith(".csv"):
-            maybe_add(os.path.join(UPLOAD_DIR, name))
+    for path in DATA_DIR.glob("*.csv"):
+        maybe_add(path)
+
+    for path in UPLOAD_DIR.glob("*.csv"):
+        maybe_add(path)
 
     if frames:
         df = pd.concat(frames, ignore_index=True)
@@ -483,7 +477,6 @@ def _call_local_ai(user_prompt: str, context: str, metric: Optional[str] = None)
         raise RuntimeError("Ollama meldet keine Antwort.")
     return text
 
-# --- Variant 2: Optional Auto-Sync über inoffizielle garminconnect-Bibliothek ---
 SLEEP_SECOND_KEYS = {
     "totalSleepSeconds",
     "sleepDurationInSeconds",
@@ -552,7 +545,7 @@ def _sync_from_garmin(days: int = 30) -> Tuple[int, Optional[str]]:
     """Fetch last N days from Garmin Connect into data/garmin_sync.csv.
     Returns (rows_written, error_message)."""
     try:
-        from garminconnect import Garmin  # type: ignore
+        from garminconnect import Garmin
     except Exception as e:
         return 0, "garminconnect nicht installiert. Bitte 'pip install garminconnect' ausführen."
 
@@ -563,7 +556,7 @@ def _sync_from_garmin(days: int = 30) -> Tuple[int, Optional[str]]:
 
     try:
         client = Garmin(email, password)
-        client.login()  # MFA beim ersten Mal möglich
+        client.login()
     except Exception as e:
         return 0, f"Login fehlgeschlagen: {e}"
 
@@ -574,7 +567,7 @@ def _sync_from_garmin(days: int = 30) -> Tuple[int, Optional[str]]:
     d = start
     while d <= today:
         ds = d.isoformat()
-        # defensiv: jede Abfrage einzeln fangen
+
         try:
             stats = client.get_stats(ds) or {}
         except Exception:
@@ -588,7 +581,7 @@ def _sync_from_garmin(days: int = 30) -> Tuple[int, Optional[str]]:
         except Exception:
             sleep = {}
 
-        # Schätze Felder robust
+
         steps = None
         for k in ("totalSteps", "steps"):
             if isinstance(stats, dict) and stats.get(k) is not None:
@@ -626,13 +619,12 @@ def index():
     filtered = _filter_by_dates(df, start, end)
 
     kpi = _kpi(filtered)
-    # Table: latest 14 days (or fewer)
+
     table_rows = []
     if not filtered.empty:
         latest = filtered.sort_values("date", ascending=False).head(14)
         table_rows = latest.to_dict(orient="records")
 
-    # Which plots to show
     metrics = []
     for m in ["steps", "calories", "rest_hr", "sleep_minutes"]:
         if _metric_present(filtered, m):
@@ -761,28 +753,36 @@ def plot(metric: str):
             ax.text(0.5, 0.5, f"Keine Daten für {DISPLAY_NAMES.get(metric, metric)}", ha="center", va="center")
             ax.set_axis_off()
         else:
-            # Robust gegen NaNs + sichere Datumsachse
-            plot_df = df[["date", metric]].dropna()
+            # Sort data chronologically to ensure differences are calculated correctly
+            plot_df = df[["date", metric]].dropna().sort_values("date")
             x = pd.to_datetime(plot_df["date"])
-            y = pd.to_numeric(plot_df[metric], errors="coerce")
-            mask = y.notna()
-            x, y = x[mask], y[mask]
-
-            if len(x) == 0:
-                ax.text(0.5, 0.5, f"Keine Daten für {DISPLAY_NAMES.get(metric, metric)}", ha="center", va="center")
-                ax.set_axis_off()
+            
+            # --- MODIFICATION FOR STEPS ---
+            if metric == "steps":
+                # Calculate the difference to the previous day
+                y = pd.to_numeric(plot_df[metric], errors="coerce").diff()
+                label_name = f"Differenz {DISPLAY_NAMES.get(metric, metric)}"
+                # Use a bar chart for differences to make increases/decreases clearer
+                colors = ['#34d399' if val >= 0 else '#fb7185' for val in y]
+                ax.bar(x, y, color=colors, alpha=0.7, label="Tägliche Änderung")
+                ax.axhline(0, color='white', linewidth=0.8, linestyle='--') # Zero line
             else:
-                ax.set_facecolor("#f8fafc")
+                # Keep absolute values for other metrics
+                y = pd.to_numeric(plot_df[metric], errors="coerce")
                 ax.plot(x, y, marker="o", linewidth=1.5, color="#2563eb", label="Tageswerte", alpha=0.85)
+                label_name = DISPLAY_NAMES.get(metric, metric)
+                
                 if len(y) >= 5:
                     rolling = pd.Series(y).rolling(window=7, min_periods=3).mean()
                     ax.plot(x, rolling, linewidth=2.2, color="#0f172a", label="7-Tage Ø")
-                ax.legend(loc="upper left", frameon=False)
-                ax.set_title(DISPLAY_NAMES.get(metric, metric))
-                ax.set_xlabel("Datum")
-                ax.set_ylabel(DISPLAY_NAMES.get(metric, metric))
-                ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
-                fig.autofmt_xdate()
+
+            ax.set_facecolor("#f8fafc")
+            ax.legend(loc="upper left", frameon=False)
+            ax.set_title(label_name if metric == "steps" else DISPLAY_NAMES.get(metric, metric))
+            ax.set_xlabel("Datum")
+            ax.set_ylabel("Anzahl" if metric == "steps" else DISPLAY_NAMES.get(metric, metric))
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+            fig.autofmt_xdate()
 
         buf = io.BytesIO()
         fig.tight_layout()

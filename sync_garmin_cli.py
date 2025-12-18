@@ -1,5 +1,3 @@
-# Optional: einmaliger CLI-Login (hilft, falls bei /sync ein MFA-Prompt nötig ist)
-# Aufruf: python sync_garmin_cli.py
 import os
 from garminconnect import Garmin
 
