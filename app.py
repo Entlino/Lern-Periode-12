@@ -32,11 +32,11 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 
 COLUMN_ALIASES: Dict[str, List[str]] = {
-    "date": ["Date", "date", "ActivityDate", "CalendarDate", "day", "StartDate", "Datum"],
-    "steps": ["Steps", "steps", "TotalSteps", "dailySteps", "Step Count", "StepCount", "step_count", "Schritte"],
-    "calories": ["Calories", "calories", "TotalCalories", "ActiveCalories", "Active Energy", "Kilocalories", "Kalorien", "totalKilocalories"],
-    "rest_hr": ["RestingHeartRate", "restingHR", "Resting Hr", "Resting HR", "rest_hr", "RestingHeartRateInBeatsPerMinute", "RHR", "Ruhepuls", "restingHeartRate"],
-    "sleep_minutes": ["SleepMinutes", "Sleep Duration (minutes)", "TotalSleepMinutes", "sleep_minutes", "Sleep time (min)", "Total Sleep Minutes", "Schlaf (Min.)", "totalSleepSeconds", "sleepDurationInSeconds"]
+    "date": ["Date", "date", "ActivityDate"],
+    "steps": ["Steps", "steps", "TotalSteps"],
+    "calories": ["Calories", "calories", "TotalCalories"],
+    "rest_hr": ["RestingHeartRate", "restingHR", "Resting Hr", "RHR"],
+    "sleep_minutes": ["TotalSleepMinutes", "SleepMinutes", "sleep_minutes"]
 }
 
 DISPLAY_NAMES = {
@@ -84,6 +84,7 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=["date", "steps", "calories", "rest_hr", "sleep_minutes"])
 
+    # Spalten umbenennen basierend auf deinen CSV-Headern
     rename_map = {}
     for canonical, aliases in COLUMN_ALIASES.items():
         present = _first_present(df.columns, aliases)
@@ -91,51 +92,17 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             rename_map[present] = canonical
     df = df.rename(columns=rename_map)
 
-    keep = [c for c in ["date", "steps", "calories", "rest_hr", "sleep_minutes"] if c in df.columns]
-    if not keep:
-
-        if "totalSleepSeconds" in df.columns:
-            df["sleep_minutes"] = pd.to_numeric(df["totalSleepSeconds"], errors="coerce") / 60.0
-            keep = ["sleep_minutes"]
-        else:
-            return pd.DataFrame(columns=["date", "steps", "calories", "rest_hr", "sleep_minutes"])
-
-    df = df[keep].copy()
-
-
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+        df = df.dropna(subset=["date"])
 
     for col in ["steps", "calories", "rest_hr", "sleep_minutes"]:
         if col in df.columns:
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.replace(",", ".", regex=False)
-                .str.replace("\u00A0", "", regex=False)
-                .str.replace(" ", "", regex=False)
-            )
+            # WICHTIG: Erst in Zahl umwandeln, dann Lücken füllen
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    if "sleep_minutes" in df.columns and df["sleep_minutes"].notna().any():
-        non_na = df["sleep_minutes"].dropna()
-        max_val = non_na.max()
-
-        if max_val > 600:
-            df["sleep_minutes"] = df["sleep_minutes"] / 60.0
-        else:
-            q95 = non_na.quantile(0.95)
-
-            if q95 <= 24:
-                df["sleep_minutes"] = df["sleep_minutes"] * 60.0
-
-    if "date" in df.columns:
-        df = df.dropna(subset=["date"])
-
-    if "date" in df.columns and len(df) > 0:
-        agg_map = {c: "mean" for c in df.columns if c != "date"}
-        df = df.groupby("date", as_index=False).agg(agg_map).sort_values("date")
-
+    # Gruppieren nach Datum (falls doppelte Einträge da sind)
+    df = df.groupby("date", as_index=False).mean(numeric_only=True).sort_values("date")
     return df
 
 def _parse_csv(file_path: str) -> pd.DataFrame:
@@ -742,57 +709,75 @@ def sync_now():
 
 @app.route("/plot/<metric>")
 def plot(metric: str):
+    import matplotlib
+    matplotlib.use("Agg") # Sicherstellen, dass Agg aktiv ist
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
     if metric not in ["steps", "calories", "rest_hr", "sleep_minutes"]:
         return "Unbekannte Metrik", 404
+    
     df, _ = _load_all_data()
-    df = _filter_by_dates(df, request.args.get("start"), request.args.get("end"))
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    try:
-        if df.empty or (metric not in df.columns) or (not df[metric].notna().any()):
-            ax.text(0.5, 0.5, f"Keine Daten für {DISPLAY_NAMES.get(metric, metric)}", ha="center", va="center")
-            ax.set_axis_off()
-        else:
-            # Sort data chronologically to ensure differences are calculated correctly
-            plot_df = df[["date", metric]].dropna().sort_values("date")
-            x = pd.to_datetime(plot_df["date"])
-            
-            # --- MODIFICATION FOR STEPS ---
-            if metric == "steps":
-                # Calculate the difference to the previous day
-                y = pd.to_numeric(plot_df[metric], errors="coerce").diff()
-                label_name = f"Differenz {DISPLAY_NAMES.get(metric, metric)}"
-                # Use a bar chart for differences to make increases/decreases clearer
-                colors = ['#34d399' if val >= 0 else '#fb7185' for val in y]
-                ax.bar(x, y, color=colors, alpha=0.7, label="Tägliche Änderung")
-                ax.axhline(0, color='white', linewidth=0.8, linestyle='--') # Zero line
-            else:
-                # Keep absolute values for other metrics
-                y = pd.to_numeric(plot_df[metric], errors="coerce")
-                ax.plot(x, y, marker="o", linewidth=1.5, color="#2563eb", label="Tageswerte", alpha=0.85)
-                label_name = DISPLAY_NAMES.get(metric, metric)
-                
-                if len(y) >= 5:
-                    rolling = pd.Series(y).rolling(window=7, min_periods=3).mean()
-                    ax.plot(x, rolling, linewidth=2.2, color="#0f172a", label="7-Tage Ø")
-
-            ax.set_facecolor("#f8fafc")
-            ax.legend(loc="upper left", frameon=False)
-            ax.set_title(label_name if metric == "steps" else DISPLAY_NAMES.get(metric, metric))
-            ax.set_xlabel("Datum")
-            ax.set_ylabel("Anzahl" if metric == "steps" else DISPLAY_NAMES.get(metric, metric))
-            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
-            fig.autofmt_xdate()
-
+    
+    if df.empty:
+        # Erzeugt ein leeres Bild mit Text statt Fehler 404
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, "Keine Daten vorhanden", ha="center", va="center")
         buf = io.BytesIO()
-        fig.tight_layout()
-        plt.savefig(buf, format="png", dpi=140)
+        plt.savefig(buf, format="png")
         plt.close(fig)
         buf.seek(0)
         return send_file(buf, mimetype="image/png")
-    except Exception as e:
+
+    # Filter: Letzte 14 Tage
+    plot_df = df.sort_values("date").tail(14).copy()
+    
+    # DATUM-FIX: Sicherstellen, dass es datetime-Objekte sind
+    plot_df["date"] = pd.to_datetime(plot_df["date"])
+    
+    # WERTE-FIX: Numerisch machen
+    plot_df[metric] = pd.to_numeric(plot_df[metric], errors="coerce")
+    plot_df = plot_df.dropna(subset=[metric, "date"])
+
+    # Diagramm erstellen
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    
+    try:
+        if plot_df.empty:
+            ax.text(0.5, 0.5, f"Keine validen {metric}-Werte gefunden", ha="center", va="center")
+        else:
+            x = plot_df["date"]
+            y = plot_df[metric]
+
+            # Spezialfall Schlaf
+            if metric == "sleep_minutes":
+                y = y / 60.0
+                label = "Stunden"
+            else:
+                label = DISPLAY_NAMES.get(metric, metric)
+
+            # Plotten
+            ax.plot(x, y, marker='o', linestyle='-', linewidth=2, color='#2563eb', markersize=5)
+            ax.fill_between(x, y, color='#2563eb', alpha=0.1)
+            
+            # Achsen formatieren
+            ax.set_title(f"Trend: {DISPLAY_NAMES.get(metric, metric)}", fontsize=12, pad=10)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m.'))
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=2))
+            ax.grid(True, linestyle=':', alpha=0.6)
+            fig.autofmt_xdate()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=120, bbox_inches='tight')
         plt.close(fig)
-        return f"Fehler beim Erstellen des Diagramms: {e}", 500
+        buf.seek(0)
+        return send_file(buf, mimetype="image/png")
+
+    except Exception as e:
+        print(f"Plot-Fehler: {e}")
+        if 'fig' in locals(): plt.close(fig)
+        return str(e), 500
+    
 
 @app.route("/download.csv")
 def download_csv():
