@@ -1,261 +1,274 @@
-{% extends "base.html" %} {% block content %}
-<section class="data-intake">
-  <form
-    class="pill upload-pill"
-    action="{{ url_for('upload') }}"
-    method="post"
-    enctype="multipart/form-data"
-  >
-    <label for="file" class="label">Garmin CSV</label>
-    <input type="file" id="file" name="file" accept=".csv" />
-    <button type="submit">Importieren</button>
-  </form>
-  <form class="pill sync-pill" action="{{ url_for('sync_now') }}" method="post">
-    <label for="days">Auto-Sync (Tage)</label>
-    <input type="number" id="days" name="days" min="1" max="365" value="30" />
-    <button type="submit">Sync</button>
-    {% if not gc_available %}
-    <span class="muted tiny">Installiere <code>garminconnect</code>.</span>
-    {% elif not garmin_env_ok %}
-    <span class="muted tiny"
-      >Setze <code>GARMIN_EMAIL</code>/<code>PASSWORD</code>.</span
-    >
-    {% else %}
-    <span class="muted tiny success">Bereit für Abruf.</span>
-    {% endif %}
-  </form>
-  <form class="pill filter-pill" method="get" action="{{ url_for('index') }}">
-    <div class="filter-range">
-      <label for="start">Von</label>
-      <input type="date" id="start" name="start" value="{{ start }}" />
-      <label for="end">Bis</label>
-      <input type="date" id="end" name="end" value="{{ end }}" />
-    </div>
-    <button type="submit">Filter</button>
-    {% if has_data %}
-    <a
-      class="ghost-btn tiny"
-      href="{{ url_for('download_csv') }}{% if query_string %}?{{ query_string|safe }}{% endif %}"
-      >Export CSV</a
-    >
-    {% endif %}
-  </form>
-</section>
-
-{% with messages = get_flashed_messages() %} {% if messages %}
-<div class="flash-stack">
-  {% for m in messages %}
-  <div class="flash">{{ m }}</div>
-  {% endfor %}
-</div>
-{% endif %} {% endwith %} {% if not has_data %}
-<section class="empty-state">
-  <div class="empty-card">
-    <h3>Noch keine Messwerte</h3>
-    <p>
-      Importiere eine CSV oder synchronisiere ein paar Tage. Danach erscheinen
-      hier automatisch die Kacheln und Analysen.
-    </p>
-  </div>
-</section>
-{% else %}
-<section class="metric-grid">
-  {% for card in metric_cards %}
-  <article
-    class="metric-card"
-    data-metric="{{ card.metric }}"
-    data-hint="{{ card.hint }}"
-  >
-    <header>
-      <div>
-        <p class="eyebrow">{{ card.label }}</p>
-        <strong class="metric-value">{{ card.latest or "–" }}</strong>
-      </div>
-      {% if card.trend and card.trend.delta %}
-      <span class="trend-chip status-{{ card.trend.tone }}">
-        {% if card.trend.change == "up" %}▲{% elif card.trend.change == "down"
-        %}▼{% else %}→{% endif %} {{ card.trend.delta }}
-      </span>
-      {% endif %}
-    </header>
-    <p class="muted small">
-      Ø {{ card.avg or "n/a" }} · Letzter Wert {{ card.latest_date or "?" }}
-    </p>
-    {% if ai_enabled %}
-    <button class="ai-chip" type="button" data-action="metric-ai">
-      KI-Analyse
-    </button>
-    <div class="metric-ai" id="ai-{{ card.metric }}">
-      <span class="placeholder">Tippe auf „KI-Analyse“.</span>
-    </div>
-    {% else %}
-    <p class="muted tiny">KI lokal deaktiviert.</p>
-    {% endif %}
-  </article>
-  {% endfor %}
-</section>
-
-<section class="secondary-grid">
-  {% if insights %}
-  <div class="panel glass">
-    <header class="panel-head">
-      <div>
-        <p class="eyebrow">Kurzstatements</p>
-        <h3>Automatische Insights</h3>
-      </div>
-    </header>
-    <ul class="insights">
-      {% for text in insights %}
-      <li>{{ text }}</li>
-      {% endfor %}
-    </ul>
-  </div>
-  {% endif %} {% if weekly_overview %}
-  <div class="panel glass">
-    <header class="panel-head">
-      <div>
-        <p class="eyebrow">Wochenrhythmus</p>
-        <h3>Aggregierte Werte</h3>
-      </div>
-    </header>
-    <div class="table-wrapper compact">
-      <table class="weekly-table">
-        <thead>
-          <tr>
-            <th>Woche</th>
-            <th>Spanne</th>
-            <th>Schritte</th>
-            <th>Kalorien</th>
-            <th>Ø Schlaf</th>
-            <th>Ø Ruhepuls</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for week in weekly_overview %}
-          <tr>
-            <td>{{ week.label }}</td>
-            <td>{{ week.range }}</td>
-            <td>{{ week.steps }}</td>
-            <td>{{ week.calories }}</td>
-            <td>{{ week.sleep }}</td>
-            <td>{{ week.rest_hr }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  {% endif %}
-</section>
-
-{% if chart_metrics %}
-<section class="chart-grid">
-  {% for m in chart_metrics %}
-  <div class="chart-card">
-    <header>
-      <h3>{{ display_names.get(m, m) }}</h3>
-      <span class="muted small">Tageswerte + 7-Tage-Schnitt</span>
-    </header>
-    <img
-      class="chart"
-      alt="{{ display_names.get(m, m) }} Diagramm"
-      src="{{ url_for('plot', metric=m) }}{% if query_string %}?{{ query_string|safe }}{% endif %}"
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ title }}</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css') }}"
     />
-  </div>
-  {% endfor %}
-</section>
-{% endif %}
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  </head>
+  <body>
+    <nav class="sidebar">
+      <div class="brand">
+        <i class="fa-solid fa-heart-pulse"></i> Garmin<span>DB</span>
+      </div>
+      <div class="nav-links">
+        <a href="/" class="active"
+          ><i class="fa-solid fa-chart-line"></i> Dashboard</a
+        >
+        <a
+          href="#"
+          onclick="document.getElementById('uploadModal').style.display='flex'"
+          ><i class="fa-solid fa-upload"></i> Import</a
+        >
+        <a href="/download.csv?start={{start}}&end={{end}}"
+          ><i class="fa-solid fa-file-csv"></i> Export</a
+        >
+        <a
+          href="#"
+          onclick="document.getElementById('settingsModal').style.display='flex'"
+          ><i class="fa-solid fa-gear"></i> Settings</a
+        >
+      </div>
 
-<section class="panel glass">
-  <div class="panel-head">
-    <div>
-      <p class="eyebrow">Tabelle</p>
-      <h3>Letzte 14 Tage</h3>
+      <div class="filter-box">
+        <small>Zeitraum</small>
+        <form action="/" method="get">
+          <input type="date" name="start" value="{{ start }}" />
+          <input type="date" name="end" value="{{ end }}" />
+          <button type="submit" class="btn-mini">
+            <i class="fa-solid fa-filter"></i> Filtern
+          </button>
+        </form>
+      </div>
+    </nav>
+
+    <main class="main-content">
+      <header class="top-bar">
+        <div>
+          <h2>Hallo! 👋</h2>
+          <p>Hier ist deine Gesundheits-Übersicht.</p>
+        </div>
+        <div class="sync-status">
+          <form action="/sync" method="post" style="display: inline">
+            <input type="hidden" name="days" value="7" />
+            <button type="submit" class="btn-sync">
+              <i class="fa-solid fa-rotate"></i> Sync
+            </button>
+          </form>
+        </div>
+      </header>
+
+      <div class="stats-grid">
+        <div class="card kpi blue">
+          <div class="icon"><i class="fa-solid fa-shoe-prints"></i></div>
+          <div>
+            <h3>{{ kpi.avg_steps | int }}</h3>
+            <p>Ø Schritte</p>
+          </div>
+        </div>
+        <div class="card kpi orange">
+          <div class="icon"><i class="fa-solid fa-fire"></i></div>
+          <div>
+            <h3>{{ kpi.avg_cal | int }}</h3>
+            <p>Ø Kalorien</p>
+          </div>
+        </div>
+        <div class="card kpi red">
+          <div class="icon"><i class="fa-solid fa-heart-crack"></i></div>
+          <div>
+            <h3>{{ kpi.avg_rhr | round(1) }}</h3>
+            <p>Ø Ruhepuls</p>
+          </div>
+        </div>
+        <div class="card kpi purple">
+          <div class="icon"><i class="fa-solid fa-bed"></i></div>
+          <div>
+            <h3>{{ (kpi.avg_sleep / 60) | round(1) }} h</h3>
+            <p>Ø Schlaf</p>
+          </div>
+        </div>
+        <div class="card kpi blue {% if kpi.avg_steps >= step_goal %}goal-reached{% endif %}">
+      </div>
     </div>
-  </div>
-  <div class="table-wrapper">
-    <table>
-      <thead>
-        <tr>
-          <th>Datum</th>
-          <th>Schritte</th>
-          <th>Kalorien</th>
-          <th>Ruhepuls</th>
-          <th>Schlaf (Min.)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in table_rows %}
-        <tr>
-          <td>{{ r["date"].strftime("%d.%m.%Y") if r["date"] else "" }}</td>
-          <td>
-            {{ ("" if r.get("steps") is none else
-            "{:,.0f}".format(r.get("steps")).replace(",", ".")) }}
-          </td>
-          <td>
-            {{ ("" if r.get("calories") is none else
-            "{:,.0f}".format(r.get("calories")).replace(",", ".")) }}
-          </td>
-          <td>
-            {{ ("" if r.get("rest_hr") is none else
-            "{:.0f}".format(r.get("rest_hr"))) }}
-          </td>
-          <td>
-            {{ ("" if r.get("sleep_minutes") is none else
-            "{:,.0f}".format(r.get("sleep_minutes")).replace(",", ".")) }}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-{% endif %} {% if files %}
-<section class="panel glass muted">
-  <strong>Geladene Dateien:</strong> {{ ", ".join(files) }}
-</section>
-{% endif %} {% endblock %}
 
-{% block scripts %}
-{{ super() }}
-{% if ai_enabled %}
-<script>
-  (function() {
-    const filters = {{ {"start": start, "end": end}|tojson }};
-    document.querySelectorAll('[data-action="metric-ai"]').forEach((btn) => {
-      btn.addEventListener("click", async (event) => {
-        const card = event.currentTarget.closest(".metric-card");
-        const metric = card.dataset.metric;
-        const hint = card.dataset.hint || "";
-        const output = card.querySelector(".metric-ai");
-        btn.disabled = true;
-        btn.textContent = "Analysiere…";
-        output.innerHTML = "<span class='placeholder'>Lokales Modell denkt nach …</span>";
-        try {
-          const resp = await fetch("{{ url_for('ai_coach') }}", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-              metric,
-              prompt: hint,
-              start: filters.start || undefined,
-              end: filters.end || undefined
-            })
-          });
-          const data = await resp.json();
-          if (!resp.ok) {
-            throw new Error(data.error || "Unbekannter Fehler");
+      <div class="card chart-container">
+        <div class="chart-header">
+          <h3><i class="fa-solid fa-chart-area"></i> Trend Analyse</h3>
+          <div class="chart-controls">
+            <button
+              onclick="updateChart('steps')"
+              class="chip active"
+              id="btn-steps"
+            >
+              Schritte
+            </button>
+            <button onclick="updateChart('sleep')" class="chip" id="btn-sleep">
+              Schlaf
+            </button>
+            <button
+              onclick="updateChart('rest_hr')"
+              class="chip"
+              id="btn-rest_hr"
+            >
+              Puls
+            </button>
+          </div>
+        </div>
+        <div id="mainChart"></div>
+      </div>
+
+      <div class="card ai-container">
+        <div class="ai-header">
+          <div class="ai-avatar"><i class="fa-solid fa-robot"></i></div>
+          <div>
+            <h3>KI Coach</h3>
+            <p>Frag mich nach Trends oder Zusammenhängen</p>
+          </div>
+        </div>
+        <div class="ai-body">
+          <div id="aiResponse" class="ai-msg">
+            Hallo! Ich analysiere deine Daten. Was möchtest du wissen?
+          </div>
+        </div>
+        <div class="ai-input">
+          <input
+            type="text"
+            id="aiPrompt"
+            placeholder="z.B. Warum schlafe ich schlecht?"
+          />
+          <button onclick="askAI()">
+            <i class="fa-solid fa-paper-plane"></i>
+          </button>
+        </div>
+      </div>
+    </main>
+
+    <div id="uploadModal" class="modal">
+      <div class="modal-content">
+        <span
+          onclick="document.getElementById('uploadModal').style.display='none'"
+          class="close"
+          >&times;</span
+        >
+        <h3>CSV Hochladen</h3>
+        <form action="/upload" method="post" enctype="multipart/form-data">
+          <input type="file" name="file" accept=".csv" />
+          <button type="submit" class="btn-sync">Hochladen</button>
+        </form>
+      </div>
+    </div>
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <span onclick="document.getElementById('settingsModal').style.display='none'" class="close">&times;</span>
+            <h3>Einstellungen</h3>
+            <form action="/settings" method="post">
+
+                <label style="display:block; margin-top:10px; font-weight:bold;">Tägliches Schritt-Ziel</label>
+                <input type="number" name="step_goal" value="{{ step_goal }}" style="width:100%; padding:8px; margin-top:5px; border:1px solid #ccc; border-radius:6px;">
+
+                <label style="display:block; margin-top:20px; font-weight:bold;">KI Persönlichkeit</label>
+                <select name="ai_persona" style="width:100%; padding:8px; margin-top:5px; border:1px solid #ccc; border-radius:6px;">
+                    <option value="coach" {% if ai_persona == 'coach' %}selected{% endif %}>Standard Coach (Freundlich)</option>
+                    <option value="drill" {% if ai_persona == 'drill' %}selected{% endif %}>Drill Sergeant (Hart)</option>
+                    <option value="yogi" {% if ai_persona == 'yogi' %}selected{% endif %}>Yogi (Spirituell)</option>
+                    <option value="nerd" {% if ai_persona == 'nerd' %}selected{% endif %}>Wissenschaftler (Präzise)</option>
+                </select>
+
+                <button type="submit" class="btn-sync" style="margin-top:20px; width:100%;">Speichern</button>
+            </form>
+        </div>
+    </div>
+    <script>
+      // Daten aus Python
+      const chartData = {{ chart_data | tojson }};
+
+      // Debugging: Schau in die Browser Konsole (F12), ob hier Daten ankommen
+      console.log("Empfangene Daten:", chartData);
+
+      const config = { responsive: true, displayModeBar: false };
+      const layout = {
+          margin: { t: 20, r: 20, l: 40, b: 40 },
+          font: { family: 'Segoe UI, sans-serif' },
+          showlegend: false,
+          autosize: true,
+          height: 350,
+          xaxis: { gridcolor: '#f3f4f6' },
+          yaxis: { gridcolor: '#f3f4f6' }
+      };
+
+      function updateChart(metric) {
+          // Buttons stylen
+          document.querySelectorAll('.chip').forEach(el => el.classList.remove('active'));
+          document.getElementById('btn-' + metric).classList.add('active');
+
+          let yValues, color, title;
+
+          if (metric === 'steps') {
+              yValues = chartData.steps; color = '#3b82f6'; title = 'Schritte';
+          } else if (metric === 'sleep') {
+              yValues = chartData.sleep; color = '#8b5cf6'; title = 'Schlaf (h)';
+          } else if (metric === 'rest_hr') {
+              yValues = chartData.rest_hr; color = '#ef4444'; title = 'Puls';
           }
-          output.textContent = data.message;
-        } catch(err) {
-          output.innerHTML = "<span class='error'>" + (err.message || "Analyse fehlgeschlagen") + "</span>";
-        } finally {
-          btn.disabled = false;
-          btn.textContent = "KI-Analyse";
-        }
-      });
-    });
-  })();
-</script>
-{% endif %}
-{% endblock %}
+
+          // Sicherstellen, dass Daten da sind
+          if (!yValues || yValues.length === 0) {
+              document.getElementById('mainChart').innerHTML = "<p style='text-align:center; padding:50px; color:#aaa;'>Keine Daten für diesen Filter.</p>";
+              return;
+          }
+
+          const trace = {
+              x: chartData.dates,
+              y: yValues,
+              type: 'scatter',
+              mode: 'lines+markers',
+              fill: 'tozeroy',
+              line: { color: color, width: 3, shape: 'spline' },
+              marker: { color: 'white', size: 6, line: {color: color, width: 2} }
+          };
+
+          Plotly.newPlot('mainChart', [trace], layout, config);
+      }
+
+      // Init
+      updateChart('steps');
+
+      async function askAI() {
+          const promptInput = document.getElementById('aiPrompt');
+          const output = document.getElementById('aiResponse');
+          const btn = document.querySelector('.ai-input button');
+
+          const txt = promptInput.value;
+          if(!txt) return;
+
+          output.innerHTML += `<br><strong>Du:</strong> ${txt}`;
+          output.scrollTop = output.scrollHeight;
+          promptInput.value = "";
+
+          btn.innerHTML = "<i class='fa-solid fa-spinner fa-spin'></i>";
+
+          try {
+              const response = await fetch('/ai/coach', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ prompt: txt, metric: 'steps', start: "{{start}}", end: "{{end}}" })
+              });
+              const data = await response.json();
+              output.innerHTML += `<br><br><strong>Coach:</strong> ${data.message || data.error}`;
+          } catch (e) {
+              output.innerHTML += `<br><em>Fehler: ${e}</em>`;
+          }
+          output.scrollTop = output.scrollHeight;
+          btn.innerHTML = "<i class='fa-solid fa-paper-plane'></i>";
+      }
+    </script>
+  </body>
+</html>
